@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "db-mcp-project-test": {
+      "command": "db-mcp",
+      "args": [
+        "--config",
+        "${CLAUDE_PROJECT_DIR:-.}/.db-mcp.toml"
+      ]
+    }
+  }
+}

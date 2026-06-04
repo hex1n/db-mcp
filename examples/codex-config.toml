@@ -1,0 +1,7 @@
+[mcp_servers.db_mcp_project_test]
+# Use "db-mcp" when it is on PATH, or replace it with an absolute path:
+# Windows: "C:\\Users\\you\\bin\\db-mcp.exe"
+# macOS: "/Users/you/bin/db-mcp"
+# Linux: "/home/you/bin/db-mcp"
+command = "db-mcp"
+args = ["--config", ".db-mcp.toml"]

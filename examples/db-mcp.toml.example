@@ -1,0 +1,42 @@
+default = "project_test"
+max_rows = 500
+max_value_bytes = 65536
+max_result_bytes = 1048576
+query_timeout_seconds = 30
+# read_only = true refuses writes server-side: execute_sql rejects non-query
+# statements and redis_command only allows small-result metadata/bounded reads.
+# Default false.
+read_only = false
+
+# OceanBase (MySQL protocol) with an env-backed password.
+[datasources.project_test]
+driver = "oceanbase"
+host = "oceanbase.example.internal"
+port = 3306
+database = "your_database"
+username = "your_user@tenant#cluster"
+password_from = "env:DB_MCP_PASSWORD"
+
+# Plain MySQL with a direct password.
+[datasources.mysql_local]
+driver = "mysql"
+host = "127.0.0.1"
+port = 3306
+database = "app"
+username = "root"
+password = "secret"
+
+# Redis. Uses redis_db (logical DB index) instead of a SQL database name.
+# username/password are optional; password_from is also supported.
+[datasources.cache_local]
+driver = "redis"
+host = "127.0.0.1"
+port = 6379
+redis_db = 0
+# password_from = "env:REDIS_PASSWORD"
+
+# SQL datasource backed by a Java properties file (jdbc:mysql URL).
+[datasources.from_properties]
+driver = "mysql"
+properties_file = "app/bootstrap/src/main/resources/config/application-test.properties"
+properties_prefix = "db.project"

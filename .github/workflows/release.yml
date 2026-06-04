@@ -1,0 +1,98 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="db-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          OUT_DIR="dist/${NAME}"
+          BIN="db-mcp"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BIN="db-mcp.exe"
+          fi
+
+          mkdir -p "${OUT_DIR}"
+          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+              -o "${OUT_DIR}/${BIN}" ./cmd/db-mcp
+          cp README.md README.zh-CN.md "${OUT_DIR}/"
+          cp examples/db-mcp.toml.example "${OUT_DIR}/"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd dist && zip -r "${NAME}.zip" "${NAME}")
+          else
+            tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          sha256sum * > checksums.txt
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" * --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" * \
+              --title "db-mcp ${GITHUB_REF_NAME}" \
+              --notes "Cross-platform db-mcp binaries and checksums."
+          fi

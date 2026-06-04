@@ -1,0 +1,16 @@
+.db-mcp.toml
+.env
+.env.*
+!.env.example
+
+bin/
+dist/
+build/
+coverage.out
+
+*.exe
+*.test
+
+.DS_Store
+.idea/
+.vscode/
