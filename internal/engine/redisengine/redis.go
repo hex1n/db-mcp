@@ -72,19 +72,14 @@ func (e *redisEngine) capCount(n int) int {
 	return n
 }
 
-func (e *redisEngine) CurrentTime(parent context.Context) (result.SQLResult, error) {
+func (e *redisEngine) CurrentTime(parent context.Context) (result.TimeResult, error) {
 	ctx, cancel := e.withTimeout(parent)
 	defer cancel()
 	tm, err := e.client.Time(ctx).Result()
 	if err != nil {
-		return result.SQLResult{}, err
+		return result.TimeResult{}, err
 	}
-	return result.SQLResult{
-		Success: true,
-		Columns: []string{"now"},
-		Data:    [][]any{{tm.Format("2006-01-02 15:04:05")}},
-		Rows:    1,
-	}, nil
+	return result.TimeResult{Success: true, Now: tm.Format("2006-01-02 15:04:05")}, nil
 }
 
 func (e *redisEngine) Scan(parent context.Context, pattern string, count int) (result.RedisScanResult, error) {
@@ -96,32 +91,24 @@ func (e *redisEngine) Scan(parent context.Context, pattern string, count int) (r
 	defer cancel()
 
 	keys := make([]string, 0, limit)
-	truncated := false
 	budget := result.NewBudget(e.limits)
 	iter := e.client.Scan(ctx, 0, pattern, int64(limit)).Iterator()
 	for iter.Next(ctx) {
 		if len(keys) >= limit {
-			truncated = true
-			budget.AddReason("element_count")
+			budget.MarkElementCount(int64(limit+1), len(keys))
 			break
 		}
 		keys = append(keys, budget.NormalizeText(iter.Val()))
 		if budget.Truncated() {
-			truncated = true
 			break
 		}
 	}
 	if err := iter.Err(); err != nil {
 		return result.RedisScanResult{}, err
 	}
-	return result.RedisScanResult{
-		Success:          true,
-		Pattern:          pattern,
-		Keys:             keys,
-		Count:            len(keys),
-		Truncated:        truncated,
-		TruncationReason: budget.Reason(),
-	}, nil
+	res := result.RedisScanResult{Success: true, Pattern: pattern, Keys: keys, Count: len(keys)}
+	budget.ApplyToRedisScanResult(&res)
+	return res, nil
 }
 
 func (e *redisEngine) Type(parent context.Context, key string) (result.RedisTypeResult, error) {
@@ -179,7 +166,6 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 				return result.RedisGetResult{}, err
 			}
 			res.Value = budget.NormalizeText(v)
-			res.Truncated = true
 			budget.AddReason("value_bytes")
 		} else {
 			v, err := e.client.Get(ctx, key).Result()
@@ -189,27 +175,34 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			res.Value = result.NormalizeRedisValue(v, budget)
 		}
 	case "list":
+		total, err := e.client.LLen(ctx, key).Result()
+		if err != nil {
+			return result.RedisGetResult{}, err
+		}
 		v, err := e.client.LRange(ctx, key, 0, int64(limit-1)).Result()
 		if err != nil {
 			return result.RedisGetResult{}, err
 		}
-		res.Value = result.NormalizeRedisValue(v, budget)
-		if len(v) >= limit {
-			res.Truncated = true
-			budget.AddReason("element_count")
+		normalized := result.NormalizeRedisValue(v, budget)
+		res.Value = normalized
+		returned := len(v)
+		if values, ok := normalized.([]string); ok {
+			returned = len(values)
 		}
+		budget.MarkElementCount(total, returned)
 	case "set":
+		total, err := e.client.SCard(ctx, key).Result()
+		if err != nil {
+			return result.RedisGetResult{}, err
+		}
 		members := make([]string, 0, limit)
 		iter := e.client.SScan(ctx, key, 0, "", int64(limit)).Iterator()
 		for iter.Next(ctx) {
 			if len(members) >= limit {
-				res.Truncated = true
-				budget.AddReason("element_count")
 				break
 			}
 			members = append(members, budget.NormalizeText(iter.Val()))
 			if budget.Truncated() {
-				res.Truncated = true
 				break
 			}
 		}
@@ -217,8 +210,14 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			return result.RedisGetResult{}, err
 		}
 		res.Value = members
+		budget.MarkElementCount(total, len(members))
 	case "hash":
+		total, err := e.client.HLen(ctx, key).Result()
+		if err != nil {
+			return result.RedisGetResult{}, err
+		}
 		m := make(map[string]any, limit)
+		returned := 0
 		iter := e.client.HScan(ctx, key, 0, "", int64(limit)).Iterator()
 		for iter.Next(ctx) {
 			field := iter.Val()
@@ -227,14 +226,12 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			}
 			value := iter.Val()
 			if len(m) >= limit {
-				res.Truncated = true
-				budget.AddReason("element_count")
 				break
 			}
 			field = budget.NormalizeText(field)
 			m[field] = result.NormalizeRedisValue(value, budget)
+			returned++
 			if budget.Truncated() {
-				res.Truncated = true
 				break
 			}
 		}
@@ -242,7 +239,12 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			return result.RedisGetResult{}, err
 		}
 		res.Value = m
+		budget.MarkElementCount(total, returned)
 	case "zset":
+		total, err := e.client.ZCard(ctx, key).Result()
+		if err != nil {
+			return result.RedisGetResult{}, err
+		}
 		z, err := e.client.ZRangeWithScores(ctx, key, 0, int64(limit-1)).Result()
 		if err != nil {
 			return result.RedisGetResult{}, err
@@ -250,19 +252,16 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 		members := make([]map[string]any, 0, len(z))
 		for _, item := range z {
 			members = append(members, map[string]any{"member": result.NormalizeRedisValue(item.Member, budget), "score": budget.AccountScalar(item.Score)})
+			if budget.Truncated() {
+				break
+			}
 		}
 		res.Value = members
-		if len(z) >= limit {
-			res.Truncated = true
-			budget.AddReason("element_count")
-		}
+		budget.MarkElementCount(total, len(members))
 	default:
 		res.Value = nil
 	}
-	if budget.Truncated() {
-		res.Truncated = true
-		res.TruncationReason = budget.Reason()
-	}
+	budget.ApplyToRedisGetResult(&res)
 	res.Exists = true
 	return res, nil
 }
@@ -288,9 +287,6 @@ func (e *redisEngine) Command(parent context.Context, argv []string) (result.Red
 		Command: budget.NormalizeText(strings.Join(argv, " ")),
 		Result:  result.NormalizeRedisValue(out, budget),
 	}
-	if budget.Truncated() {
-		res.Truncated = true
-		res.TruncationReason = budget.Reason()
-	}
+	budget.ApplyToRedisCommandResult(&res)
 	return res, nil
 }

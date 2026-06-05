@@ -1,6 +1,7 @@
 package engine_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hex1n/db-mcp/internal/config"
@@ -42,5 +43,38 @@ func TestRegistryDriverRouting(t *testing.T) {
 	ds.Driver = "mongodb"
 	if _, err := registry.NewEngine(ds, cfg); err == nil {
 		t.Fatal("expected error for unsupported driver 'mongodb', got nil")
+	}
+}
+
+func TestRegistryValidateConfigRejectsUnsupportedDriver(t *testing.T) {
+	registry := engine.NewRegistry(mysqlengine.Registrations()...)
+	cfg := config.Config{
+		Default: "bad",
+		Datasources: map[string]config.DatasourceConfig{
+			"ok":  {Driver: "mysql"},
+			"bad": {Driver: "mongodb"},
+		},
+	}
+
+	err := registry.ValidateConfig(cfg)
+	if err == nil {
+		t.Fatal("expected unsupported driver validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), `datasource "bad"`) || !strings.Contains(err.Error(), `unsupported driver "mongodb"`) {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestRegistryValidateConfigAcceptsDefaultMySQLDriver(t *testing.T) {
+	registry := engine.NewRegistry(mysqlengine.Registrations()...)
+	cfg := config.Config{
+		Default: "implicit",
+		Datasources: map[string]config.DatasourceConfig{
+			"implicit": {},
+		},
+	}
+
+	if err := registry.ValidateConfig(cfg); err != nil {
+		t.Fatalf("implicit mysql driver should validate: %v", err)
 	}
 }

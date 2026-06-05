@@ -19,6 +19,7 @@
 - 可插拔引擎注册表：新增数据库只需要一次注册和一个引擎实现。
 - 工具按已配置的类型注册：没有 SQL 数据源的配置不会暴露 SQL 工具，反之亦然。
 - 支持直接凭据、环境变量密码，或（SQL）基于 Java properties 的 JDBC 配置。
+- 两种操作模式：`inspect` 用于代理的有边界读取，`operate` 用于本地明确允许的原生命令/写操作。
 - 通过 `max_rows` 限制行数/元素数，通过 `max_value_bytes` 限制单值预览，通过 `max_result_bytes` 尽力限制 MCP 响应大小。
 
 ## 工具
@@ -104,8 +105,9 @@ max_rows = 500
 max_value_bytes = 65536
 max_result_bytes = 1048576
 query_timeout_seconds = 30
-# read_only = true 会在服务端拒绝写入（见下方“只读模式”）。
-read_only = false
+# inspect 是推荐给代理使用的默认姿态。只有在本地测试库明确允许
+# 原生命令/写操作时，才使用 mode = "operate"。
+mode = "inspect"
 
 # 使用环境变量密码的 OceanBase（MySQL 协议）。
 [datasources.project_test]
@@ -138,6 +140,8 @@ redis_db = 0
 
 - 配置多个数据源时必须设置 `default`。只有一个数据源时可以省略，此时会解析为该数据源。
 - `max_rows` 限制行数或集合元素数，不限制字节数。`max_value_bytes` 限制每个返回值的预览，`max_result_bytes` 尽力限制返回的 MCP payload。带 `truncated` 的响应是预览，不是完整数据。
+- `mode = "inspect"` 会把 `execute_sql` 和 `redis_command` 限制为有边界读取。`mode = "operate"` 保留原生命令/写操作能力。为了向后兼容，省略 `mode` 时 db-mcp 使用 `operate`。
+- 旧的 `read_only = true` 仍作为 `mode = "inspect"` 的兼容写法被接受，但不要同时配置 `mode` 和 `read_only`。
 - 配置多个数据源时，`execute_sql` 和 `redis_command` 必须显式传入 `datasource`。
 
 各 driver 说明：
@@ -164,16 +168,20 @@ properties_prefix = "db.project"
 
 `properties_file` 仅支持 SQL。
 
-## 只读模式
+## 操作模式
 
-在顶层设置 `read_only = true`，即可在服务端拒绝变更：
+在顶层设置 `mode = "inspect"`，即可在服务端拒绝变更：
 
 - `execute_sql` 只接受 `SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN`。`WITH`/CTE 语句会被拒绝（CTE 可能包裹 `DELETE`/`UPDATE`），`SELECT ... INTO OUTFILE`/`DUMPFILE` 也会被拒绝。
 - `redis_command` 只接受小结果的元数据读取，或由参数限定结果大小的读取（`PING`、`TIME`、`TYPE`、`TTL`、`EXISTS`、`STRLEN`、`GETRANGE`、`HLEN`、`LLEN`、`SCARD`、`ZCARD` 等）。写命令以及结果可能被数据或参数放大的原生命令（`SET`/`DEL`/`FLUSHALL`、`KEYS`、`SCAN`、`MGET`、`HGETALL`、`SMEMBERS`、`LRANGE`、`ZRANGE`、`HSCAN` 等）会被拒绝；请使用 `redis_get`/`redis_scan` 进行有边界的数据读取。
 - 内置只读工具（`list_tables`、`redis_get` 等）不受影响。
-- 写工具即使在此模式下仍保留 `destructiveHint`，所以客户端仍会在运行前提示。只读模式是防护，不是保证。
+- 写工具即使在此模式下仍保留 `destructiveHint`，所以客户端仍会在运行前提示。inspect 模式是防护，不是保证。
 
 这是尽力而为的语句级防护，它不会解析 SQL，因此无法捕获 `SELECT` 内有副作用的函数。结果预算也发生在数据库客户端产出值之后，所以非常大的 SQL 单元格仍可能在被截断成 MCP 输出前消耗 driver 内存。若需要硬保证，请同时使用只读数据库账号，或 Redis ACL/只读副本。
+
+只有在本地测试库明确允许原生命令/写操作时才使用 `mode = "operate"`。operate 模式下，`execute_sql` 和 `redis_command` 在配置多个数据源时仍必须显式传入 `datasource`，且两个工具仍保留 `destructiveHint`。
+
+旧的 `read_only = true` 仍作为 `mode = "inspect"` 的兼容写法被支持。新配置应使用 `mode`。
 
 省略 `--config` 时，配置查找顺序为：
 
@@ -243,15 +251,17 @@ macOS/Linux：
 
 Claude Code 的 `.mcp.json` 支持环境变量展开，包括 `${VAR}` 和 `${VAR:-default}`。
 
-## 本地验证
+## 开发验证
 
-Windows：
+本地检查：
 
-```powershell
-db-mcp.exe --version
+```bash
+go test ./...
+go vet ./...
+go build ./cmd/db-mcp
 ```
 
-macOS/Linux：
+安装或构建二进制后，验证 CLI：
 
 ```bash
 db-mcp --version
@@ -264,3 +274,32 @@ select database() as db_name, now() as db_time
 ```
 
 对于 Redis 数据源，请让客户端以 `["PING"]` 运行 `redis_command`，或以 pattern `*` 运行 `redis_scan`。
+
+可选的真实连接 smoke tests 默认跳过；只有设置对应环境变量时才会运行：
+
+```bash
+DB_MCP_TEST_MYSQL=127.0.0.1:3306/app \
+DB_MCP_TEST_MYSQL_USER=root \
+DB_MCP_TEST_MYSQL_PASSWORD=secret \
+go test -run TestMySQLLiveSmoke ./internal/engine/mysqlengine
+
+DB_MCP_TEST_OCEANBASE=oceanbase.example.internal:3306/app \
+DB_MCP_TEST_OCEANBASE_USER='user@tenant#cluster' \
+DB_MCP_TEST_OCEANBASE_PASSWORD=secret \
+go test -run TestOceanBaseLiveSmoke ./internal/engine/mysqlengine
+
+DB_MCP_TEST_REDIS=127.0.0.1:6379 \
+go test -run TestRedisLiveSmoke ./internal/engine/redisengine
+```
+
+CI 会在 Linux、macOS 和 Windows 上运行本地检查，并在 Linux service containers 上运行 MySQL 与 Redis 真实连接 smoke tests。OceanBase 仍保留为环境变量触发的 smoke test，因为它需要兼容的外部测试实例。
+
+发布 tag 前，请确认 `main` 的 CI 为绿色。release workflow 会打包上文同一个 `./cmd/db-mcp` 二进制路径。
+
+## 边界
+
+db-mcp 不是生产数据库安全网关。它不提供完整 SQL 解析、RBAC、审计审批流、Redis Cluster/Sentinel 支持或 PostgreSQL 支持。需要硬安全边界时，请使用数据库侧只读账号、Redis ACL 和网络隔离。
+
+## 文档
+
+当前文档索引和历史计划状态见 `docs/README.md`。

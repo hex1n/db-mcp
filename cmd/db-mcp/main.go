@@ -8,8 +8,6 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/hex1n/db-mcp/internal/app"
 	"github.com/hex1n/db-mcp/internal/config"
 	"github.com/hex1n/db-mcp/internal/drivers"
@@ -34,11 +32,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	application := app.New(cfg, *configPath, drivers.DefaultRegistry())
+	registry := drivers.DefaultRegistry()
+	if err := registry.ValidateConfig(cfg); err != nil {
+		log.Fatal(err)
+	}
+
+	application := app.New(cfg, *configPath, registry)
 	defer application.Close()
 
-	server := mcpserver.New(application, resolvedVersion)
-	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if err := mcpserver.RunStdio(context.Background(), application, resolvedVersion); err != nil {
 		log.Fatal(err)
 	}
 }

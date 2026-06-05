@@ -17,6 +17,8 @@ const (
 	DefaultQueryTimeoutSeconds = 30
 	DefaultMaxValueBytes       = 64 * 1024
 	DefaultMaxResultBytes      = 1024 * 1024
+	ModeInspect                = "inspect"
+	ModeOperate                = "operate"
 )
 
 type Config struct {
@@ -25,6 +27,7 @@ type Config struct {
 	MaxValueBytes       int                         `toml:"max_value_bytes"`
 	MaxResultBytes      int                         `toml:"max_result_bytes"`
 	QueryTimeoutSeconds int                         `toml:"query_timeout_seconds"`
+	Mode                string                      `toml:"mode"`
 	ReadOnly            bool                        `toml:"read_only"`
 	Datasources         map[string]DatasourceConfig `toml:"datasources"`
 }
@@ -54,10 +57,17 @@ func DefaultPath() string {
 
 func Load(path string) (Config, error) {
 	var cfg Config
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return cfg, err
 	}
+	if meta.IsDefined("mode") && meta.IsDefined("read_only") {
+		return cfg, errors.New("mode and read_only cannot both be configured")
+	}
 	cfg = ApplyDefaults(cfg)
+	if err := ValidateMode(cfg.Mode); err != nil {
+		return cfg, err
+	}
 	if len(cfg.Datasources) == 0 {
 		return cfg, errors.New("no datasources configured")
 	}
@@ -88,7 +98,25 @@ func ApplyDefaults(cfg Config) Config {
 	if cfg.QueryTimeoutSeconds <= 0 {
 		cfg.QueryTimeoutSeconds = DefaultQueryTimeoutSeconds
 	}
+	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if cfg.Mode == "" {
+		if cfg.ReadOnly {
+			cfg.Mode = ModeInspect
+		} else {
+			cfg.Mode = ModeOperate
+		}
+	}
+	cfg.ReadOnly = cfg.Mode == ModeInspect
 	return cfg
+}
+
+func ValidateMode(mode string) error {
+	switch mode {
+	case ModeInspect, ModeOperate:
+		return nil
+	default:
+		return fmt.Errorf("unsupported mode %q (allowed: %s, %s)", mode, ModeInspect, ModeOperate)
+	}
 }
 
 func DriverName(ds DatasourceConfig) string {
@@ -104,73 +132,124 @@ func IsRedisDriver(ds DatasourceConfig) bool {
 }
 
 func ResolveDatasource(cfg Config, configPath, name string) (DatasourceConfig, error) {
-	ds, ok := cfg.Datasources[name]
+	resolver := datasourceResolver{
+		cfg:        cfg,
+		configPath: configPath,
+		name:       name,
+	}
+	return resolver.resolve()
+}
+
+type datasourceResolver struct {
+	cfg        Config
+	configPath string
+	name       string
+	ds         DatasourceConfig
+}
+
+func (r *datasourceResolver) resolve() (DatasourceConfig, error) {
+	if err := r.lookup(); err != nil {
+		return DatasourceConfig{}, err
+	}
+	if err := r.enrichFromProperties(); err != nil {
+		return DatasourceConfig{}, err
+	}
+	if err := r.applyDriverDefaults(); err != nil {
+		return DatasourceConfig{}, err
+	}
+	if err := r.resolveSecrets(); err != nil {
+		return DatasourceConfig{}, err
+	}
+	if err := r.applyConnectionDefaults(); err != nil {
+		return DatasourceConfig{}, err
+	}
+	return r.ds, nil
+}
+
+func (r *datasourceResolver) lookup() error {
+	ds, ok := r.cfg.Datasources[r.name]
 	if !ok {
-		return DatasourceConfig{}, fmt.Errorf("datasource %q is not configured", name)
+		return fmt.Errorf("datasource %q is not configured", r.name)
+	}
+	r.ds = ds
+	return nil
+}
+
+func (r *datasourceResolver) enrichFromProperties() error {
+	if r.ds.PropertiesFile == "" {
+		return nil
+	}
+	if IsRedisDriver(r.ds) {
+		return fmt.Errorf("datasource %q: properties_file is only supported for SQL drivers", r.name)
+	}
+	props, err := loadProperties(resolvePath(r.configPath, r.ds.PropertiesFile))
+	if err != nil {
+		return err
+	}
+	prefix := r.ds.PropertiesPrefix
+	if prefix == "" {
+		return fmt.Errorf("datasource %q properties_prefix is required when properties_file is set", r.name)
+	}
+	jdbcURL := props[prefix+".url"]
+	host, port, database, err := parseJDBCMySQLURL(jdbcURL)
+	if err != nil {
+		return fmt.Errorf("datasource %q: %w", r.name, err)
+	}
+	if r.ds.Host == "" {
+		r.ds.Host = host
+	}
+	if r.ds.Port == 0 {
+		r.ds.Port = port
+	}
+	if r.ds.Database == "" {
+		r.ds.Database = database
+	}
+	if r.ds.Username == "" {
+		r.ds.Username = props[prefix+".username"]
+	}
+	if r.ds.Password == "" && r.ds.PasswordFrom == "" {
+		r.ds.Password = props[prefix+".password"]
+	}
+	return nil
+}
+
+func (r *datasourceResolver) applyDriverDefaults() error {
+	if r.ds.Driver == "" {
+		r.ds.Driver = "mysql"
+	}
+	return nil
+}
+
+func (r *datasourceResolver) resolveSecrets() error {
+	if r.ds.PasswordFrom == "" {
+		return nil
+	}
+	password, err := resolveSecret(r.ds.PasswordFrom)
+	if err != nil {
+		return err
+	}
+	r.ds.Password = password
+	return nil
+}
+
+func (r *datasourceResolver) applyConnectionDefaults() error {
+	if IsRedisDriver(r.ds) {
+		if r.ds.Port == 0 {
+			r.ds.Port = 6379
+		}
+		if r.ds.Host == "" {
+			return fmt.Errorf("datasource %q is missing host", r.name)
+		}
+		return nil
 	}
 
-	if ds.PropertiesFile != "" {
-		if IsRedisDriver(ds) {
-			return DatasourceConfig{}, fmt.Errorf("datasource %q: properties_file is only supported for SQL drivers", name)
-		}
-		props, err := loadProperties(resolvePath(configPath, ds.PropertiesFile))
-		if err != nil {
-			return DatasourceConfig{}, err
-		}
-		prefix := ds.PropertiesPrefix
-		if prefix == "" {
-			return DatasourceConfig{}, fmt.Errorf("datasource %q properties_prefix is required when properties_file is set", name)
-		}
-		jdbcURL := props[prefix+".url"]
-		host, port, database, err := parseJDBCMySQLURL(jdbcURL)
-		if err != nil {
-			return DatasourceConfig{}, fmt.Errorf("datasource %q: %w", name, err)
-		}
-		if ds.Host == "" {
-			ds.Host = host
-		}
-		if ds.Port == 0 {
-			ds.Port = port
-		}
-		if ds.Database == "" {
-			ds.Database = database
-		}
-		if ds.Username == "" {
-			ds.Username = props[prefix+".username"]
-		}
-		if ds.Password == "" && ds.PasswordFrom == "" {
-			ds.Password = props[prefix+".password"]
-		}
+	if r.ds.Port == 0 {
+		r.ds.Port = 3306
 	}
-
-	if ds.Driver == "" {
-		ds.Driver = "mysql"
+	if r.ds.Host == "" || r.ds.Database == "" || r.ds.Username == "" {
+		return fmt.Errorf("datasource %q is missing host/database/username", r.name)
 	}
-	if ds.PasswordFrom != "" {
-		password, err := resolveSecret(ds.PasswordFrom)
-		if err != nil {
-			return DatasourceConfig{}, err
-		}
-		ds.Password = password
-	}
-
-	if IsRedisDriver(ds) {
-		if ds.Port == 0 {
-			ds.Port = 6379
-		}
-		if ds.Host == "" {
-			return DatasourceConfig{}, fmt.Errorf("datasource %q is missing host", name)
-		}
-		return ds, nil
-	}
-
-	if ds.Port == 0 {
-		ds.Port = 3306
-	}
-	if ds.Host == "" || ds.Database == "" || ds.Username == "" {
-		return DatasourceConfig{}, fmt.Errorf("datasource %q is missing host/database/username", name)
-	}
-	return ds, nil
+	return nil
 }
 
 func resolvePath(configPath, path string) string {

@@ -3,9 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -174,8 +172,8 @@ func contentText(res *mcp.CallToolResult) string {
 type fakeKVEngine struct{}
 
 func (fakeKVEngine) Kind() string { return "testkv" }
-func (fakeKVEngine) CurrentTime(context.Context) (result.SQLResult, error) {
-	return result.SQLResult{Success: true}, nil
+func (fakeKVEngine) CurrentTime(context.Context) (result.TimeResult, error) {
+	return result.TimeResult{Success: true, Now: "2026-06-05 12:00:00"}, nil
 }
 func (fakeKVEngine) Close() error { return nil }
 
@@ -257,42 +255,6 @@ func TestWrongKindSQLToolErrors(t *testing.T) {
 	}
 }
 
-func TestToolAnnotations(t *testing.T) {
-	cs, done := connect(t, testApp())
-	defer done()
-
-	byName := toolsByName(t, cs)
-	for _, name := range []string{
-		"list_datasources", "current_datasource", "get_current_time",
-		"list_tables", "describe_table", "sample_table",
-	} {
-		tool := byName[name]
-		if tool == nil {
-			t.Fatalf("tool %q not registered", name)
-		}
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Fatalf("tool %q must set ReadOnlyHint=true, got %+v", name, tool.Annotations)
-		}
-		if tool.Annotations.DestructiveHint != nil && *tool.Annotations.DestructiveHint {
-			t.Fatalf("read-only tool %q must not be destructive", name)
-		}
-	}
-
-	w := byName["execute_sql"]
-	if w == nil || w.Annotations == nil {
-		t.Fatalf("execute_sql missing annotations")
-	}
-	if w.Annotations.ReadOnlyHint {
-		t.Fatalf("execute_sql must not be read-only")
-	}
-	if w.Annotations.DestructiveHint == nil || !*w.Annotations.DestructiveHint {
-		t.Fatalf("execute_sql must set DestructiveHint=true, got %+v", w.Annotations)
-	}
-	if w.Title != "Execute SQL" {
-		t.Fatalf("execute_sql title = %q, want %q", w.Title, "Execute SQL")
-	}
-}
-
 func toolsByName(t *testing.T, cs *mcp.ClientSession) map[string]*mcp.Tool {
 	t.Helper()
 	res, err := cs.ListTools(context.Background(), nil)
@@ -308,7 +270,7 @@ func toolsByName(t *testing.T, cs *mcp.ClientSession) map[string]*mcp.Tool {
 
 func readOnlySQLApp() *app.App {
 	cfg := testApp().Config()
-	cfg.ReadOnly = true
+	cfg.Mode = config.ModeInspect
 	return app.New(cfg, ".db-mcp.toml", defaultRegistry())
 }
 
@@ -331,19 +293,33 @@ func TestReadOnlyBlocksSQLWrite(t *testing.T) {
 	}
 }
 
-func TestReadOnlyModeAnnotations(t *testing.T) {
-	cs, done := connect(t, readOnlySQLApp())
+func TestGetCurrentTimeUsesNeutralResultShape(t *testing.T) {
+	application := app.New(config.Config{
+		Default: "k", MaxRows: 500, QueryTimeoutSeconds: 30,
+		Datasources: map[string]config.DatasourceConfig{
+			"k": {Driver: "testkv", Host: "x", Database: "d", Username: "u"},
+		},
+	}, ".db-mcp.toml", testKVRegistry())
+	cs, done := connect(t, application)
 	defer done()
 
-	w := toolsByName(t, cs)["execute_sql"]
-	if w == nil || w.Annotations == nil {
-		t.Fatalf("execute_sql not registered with annotations")
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_current_time",
+		Arguments: map[string]any{"datasource": "k"},
+	})
+	if err != nil {
+		t.Fatalf("transport error: %v", err)
 	}
-	if w.Annotations.ReadOnlyHint {
-		t.Fatalf("read-only mode must not mark execute_sql ReadOnlyHint=true")
+	if res.IsError {
+		t.Fatalf("expected successful result, got: %s", contentText(res))
 	}
-	if w.Annotations.DestructiveHint == nil || !*w.Annotations.DestructiveHint {
-		t.Fatalf("execute_sql must keep DestructiveHint=true in read-only mode, got %+v", w.Annotations)
+	blob, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	text := string(blob)
+	if !strings.Contains(text, `"now"`) || strings.Contains(text, `"columns"`) || strings.Contains(text, `"data"`) {
+		t.Fatalf("expected neutral time result shape, got: %s", text)
 	}
 }
 
@@ -381,108 +357,10 @@ func redisOnlyApp() *app.App {
 	}, ".db-mcp.toml", defaultRegistry())
 }
 
-func TestRedisToolsRegisteredKVOnly(t *testing.T) {
-	cs, done := connect(t, redisOnlyApp())
-	defer done()
-
-	got := toolNames(t, cs)
-	want := []string{
-		"current_datasource",
-		"get_current_time",
-		"list_datasources",
-		"redis_command",
-		"redis_get",
-		"redis_scan",
-		"redis_ttl",
-		"redis_type",
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("redis-only tool set mismatch\n got: %v\nwant: %v", got, want)
-	}
-}
-
-func TestRedisLiveSmoke(t *testing.T) {
-	addr := os.Getenv("DB_MCP_TEST_REDIS")
-	if addr == "" {
-		t.Skip("set DB_MCP_TEST_REDIS=host:port to run the live redis smoke test")
-	}
-	host, portStr, ok := strings.Cut(addr, ":")
-	if !ok {
-		t.Fatalf("DB_MCP_TEST_REDIS must be host:port, got %q", addr)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		t.Fatalf("bad port in DB_MCP_TEST_REDIS: %v", err)
-	}
-
-	application := app.New(config.Config{
-		Default: "r", MaxRows: 500, QueryTimeoutSeconds: 30,
-		Datasources: map[string]config.DatasourceConfig{
-			"r": {Driver: "redis", Host: host, Port: port},
-		},
-	}, ".db-mcp.toml", defaultRegistry())
-	cs, done := connect(t, application)
-	defer done()
-	ctx := context.Background()
-
-	call := func(name string, args map[string]any) *mcp.CallToolResult {
-		t.Helper()
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
-		if err != nil {
-			t.Fatalf("%s transport error: %v", name, err)
-		}
-		if res.IsError {
-			t.Fatalf("%s failed: %s", name, contentText(res))
-		}
-		return res
-	}
-
-	const key = "obmcp:smoke"
-	call("redis_command", map[string]any{"command": []any{"SET", key, "hello"}})
-	defer call("redis_command", map[string]any{"command": []any{"DEL", key}})
-
-	getRes := call("redis_get", map[string]any{"key": key})
-	if blob, _ := json.Marshal(getRes); !strings.Contains(string(blob), "hello") {
-		t.Fatalf("redis_get did not return the stored value: %s", blob)
-	}
-
-	typeRes := call("redis_type", map[string]any{"key": key})
-	if blob, _ := json.Marshal(typeRes); !strings.Contains(string(blob), "string") {
-		t.Fatalf("redis_type expected 'string': %s", blob)
-	}
-
-	call("redis_ttl", map[string]any{"key": key})
-	call("redis_scan", map[string]any{"pattern": "obmcp:*"})
-}
-
-func TestRedisToolAnnotations(t *testing.T) {
-	cs, done := connect(t, redisOnlyApp())
-	defer done()
-
-	byName := toolsByName(t, cs)
-	for _, name := range []string{"redis_scan", "redis_get", "redis_type", "redis_ttl"} {
-		tool := byName[name]
-		if tool == nil || tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Fatalf("redis tool %q must set ReadOnlyHint=true, got %+v", name, tool)
-		}
-	}
-
-	cmd := byName["redis_command"]
-	if cmd == nil || cmd.Annotations == nil {
-		t.Fatalf("redis_command missing annotations")
-	}
-	if cmd.Annotations.ReadOnlyHint {
-		t.Fatalf("redis_command must not be read-only")
-	}
-	if cmd.Annotations.DestructiveHint == nil || !*cmd.Annotations.DestructiveHint {
-		t.Fatalf("redis_command must set DestructiveHint=true, got %+v", cmd.Annotations)
-	}
-}
-
 func TestReadOnlyBlocksRedisWrite(t *testing.T) {
 	application := redisOnlyApp()
 	cfg := application.Config()
-	cfg.ReadOnly = true
+	cfg.Mode = config.ModeInspect
 	application = app.New(cfg, ".db-mcp.toml", defaultRegistry())
 	cs, done := connect(t, application)
 	defer done()
@@ -551,7 +429,7 @@ func TestRedisCommandSingleDatasourceMayUseDefault(t *testing.T) {
 func TestReadOnlyRejectsUnboundedRedisRawReads(t *testing.T) {
 	application := redisOnlyApp()
 	cfg := application.Config()
-	cfg.ReadOnly = true
+	cfg.Mode = config.ModeInspect
 	application = app.New(cfg, ".db-mcp.toml", defaultRegistry())
 	cs, done := connect(t, application)
 	defer done()

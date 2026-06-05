@@ -1,5 +1,9 @@
 # db-mcp 安全硬化最佳改进方案
 
+Status: implemented / superseded for active work by current source, README,
+tests, `docs/plans/2026-06-05-db-mcp-best-improvement-plan.md`, and
+`docs/plans/2026-06-05-db-mcp-architecture-improvement-plan.md`.
+
 Mode: Plan
 Depth: Standard+
 Input sources read: `main.go`, `engine.go`, `redis.go`, `server_test.go`, `redis_test.go`, `engine_test.go`, `README.md`, `examples/db-mcp.toml.example`, `docs/multi-db-mcp-architecture.md`, `first-principles-planner/REFERENCE.md`

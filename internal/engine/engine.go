@@ -10,7 +10,7 @@ import (
 
 type Engine interface {
 	Kind() string
-	CurrentTime(ctx context.Context) (result.SQLResult, error)
+	CurrentTime(ctx context.Context) (result.TimeResult, error)
 	Close() error
 }
 
@@ -71,6 +71,16 @@ func (r *Registry) NewEngine(ds config.DatasourceConfig, cfg config.Config) (Eng
 		return nil, fmt.Errorf("unsupported driver %q", ds.Driver)
 	}
 	return spec.Factory(ds, cfg)
+}
+
+func (r *Registry) ValidateConfig(cfg config.Config) error {
+	for name, ds := range cfg.Datasources {
+		driver := config.DriverName(ds)
+		if _, ok := r.specs[driver]; !ok {
+			return fmt.Errorf("datasource %q: unsupported driver %q", name, driver)
+		}
+	}
+	return nil
 }
 
 func (r *Registry) Category(ds config.DatasourceConfig) (string, bool) {

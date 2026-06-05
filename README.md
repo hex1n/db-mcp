@@ -23,6 +23,8 @@ One server can serve several datasources of different kinds at the same time.
   will not expose SQL tools, and vice versa.
 - Direct credentials, environment-backed passwords, or (for SQL) Java
   properties-backed JDBC config.
+- Two operation modes: `inspect` for bounded agent reads and `operate` for
+  explicit local raw/write work.
 - Bounded row/element counts via `max_rows`, single-value previews via `max_value_bytes`, and best-effort MCP response caps via `max_result_bytes`.
 
 ## Tools
@@ -121,8 +123,9 @@ max_rows = 500
 max_value_bytes = 65536
 max_result_bytes = 1048576
 query_timeout_seconds = 30
-# read_only = true rejects writes server-side (see "Read-only mode" below).
-read_only = false
+# inspect is the recommended default for agent use. Use mode = "operate" only
+# for local test databases where raw/write commands are explicitly allowed.
+mode = "inspect"
 
 # OceanBase (MySQL protocol) with an env-backed password.
 [datasources.project_test]
@@ -158,6 +161,11 @@ General notes:
 - `max_rows` limits rows or collection elements, not bytes. `max_value_bytes` caps
   each returned value preview, and `max_result_bytes` caps the returned MCP payload
   on a best-effort basis. A `truncated` response is a preview, not full data.
+- `mode = "inspect"` restricts `execute_sql` and `redis_command` to bounded reads.
+  `mode = "operate"` keeps raw/write capabilities enabled. If `mode` is omitted,
+  db-mcp uses `operate` for backward compatibility.
+- Legacy `read_only = true` is still accepted as `mode = "inspect"`, but do not
+  configure both `mode` and `read_only`.
 - `execute_sql` and `redis_command` require an explicit `datasource` when multiple
   datasources are configured.
 
@@ -187,9 +195,9 @@ properties_prefix = "db.project"
 
 `properties_file` is SQL-only.
 
-## Read-only mode
+## Operation Modes
 
-Set `read_only = true` at the top level to refuse mutations server-side:
+Set `mode = "inspect"` at the top level to refuse mutations server-side:
 
 - `execute_sql` accepts only `SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN`. `WITH`/
   CTE statements are rejected (a CTE can wrap `DELETE`/`UPDATE`), as is
@@ -202,7 +210,7 @@ Set `read_only = true` at the top level to refuse mutations server-side:
   `redis_get`/`redis_scan` for bounded data reads.
 - The read-only built-ins (`list_tables`, `redis_get`, ...) are unaffected.
 - The write tools keep their `destructiveHint` even in this mode, so clients
-  still prompt before running them — read-only is a guard, not a guarantee.
+  still prompt before running them — inspect mode is a guard, not a guarantee.
 
 This is a best-effort statement-level guard — it does not parse SQL, so a
 side-effecting function inside a `SELECT` is not caught. Result budgets also run
@@ -210,6 +218,14 @@ after the database client has produced values, so very large SQL cells may still
 consume driver memory before they are truncated for MCP output. For a hard
 guarantee, also use a read-only database account or a Redis ACL/read-only
 replica.
+
+Use `mode = "operate"` only for local test databases where raw/write statements
+and Redis commands are intentionally available. In operate mode,
+`execute_sql` and `redis_command` still require explicit `datasource` when more
+than one datasource is configured, and both retain `destructiveHint`.
+
+Legacy `read_only = true` remains supported as an alias for `mode = "inspect"`.
+New configs should use `mode`.
 
 Config lookup order when `--config` is omitted:
 
@@ -280,15 +296,17 @@ macOS/Linux:
 Claude Code supports environment-variable expansion in `.mcp.json`, including
 `${VAR}` and `${VAR:-default}`.
 
-## Local Verification
+## Development Verification
 
-Windows:
+Local checks:
 
-```powershell
-db-mcp.exe --version
+```bash
+go test ./...
+go vet ./...
+go build ./cmd/db-mcp
 ```
 
-macOS/Linux:
+After installing or building the binary, verify the CLI:
 
 ```bash
 db-mcp --version
@@ -302,3 +320,41 @@ select database() as db_name, now() as db_time
 
 For a Redis datasource, ask it to run `redis_command` with `["PING"]`, or
 `redis_scan` with pattern `*`.
+
+Optional live smoke tests are skipped unless their environment variables are
+set:
+
+```bash
+DB_MCP_TEST_MYSQL=127.0.0.1:3306/app \
+DB_MCP_TEST_MYSQL_USER=root \
+DB_MCP_TEST_MYSQL_PASSWORD=secret \
+go test -run TestMySQLLiveSmoke ./internal/engine/mysqlengine
+
+DB_MCP_TEST_OCEANBASE=oceanbase.example.internal:3306/app \
+DB_MCP_TEST_OCEANBASE_USER='user@tenant#cluster' \
+DB_MCP_TEST_OCEANBASE_PASSWORD=secret \
+go test -run TestOceanBaseLiveSmoke ./internal/engine/mysqlengine
+
+DB_MCP_TEST_REDIS=127.0.0.1:6379 \
+go test -run TestRedisLiveSmoke ./internal/engine/redisengine
+```
+
+CI runs the local checks on Linux, macOS, and Windows. It also runs MySQL and
+Redis live smoke tests on Linux service containers. OceanBase remains an
+environment-triggered smoke test because it requires a compatible external test
+instance.
+
+Before tagging a release, verify that `main` is green in CI. The release
+workflow packages the same `./cmd/db-mcp` binary path documented above.
+
+## Boundaries
+
+db-mcp is not a production database security gateway. It does not provide full
+SQL parsing, RBAC, audit approval flows, Redis Cluster/Sentinel support, or
+PostgreSQL support. Use database-side read-only accounts, Redis ACLs, and
+network isolation for hard safety boundaries.
+
+## Docs
+
+See `docs/README.md` for the current docs index and the status of historical
+plans.

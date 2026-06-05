@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Limits struct {
@@ -53,6 +54,40 @@ func (b *Budget) AddReason(reason string) {
 	}
 }
 
+func (b *Budget) MarkElementCount(total int64, returned int) {
+	if b != nil && total > int64(returned) {
+		b.AddReason("element_count")
+	}
+}
+
+func (b *Budget) MarkRowCount() {
+	b.AddReason("row_count")
+}
+
+func (b *Budget) ApplyToSQLResult(res *SQLResult) {
+	applyBudgetTruncation(b, &res.Truncated, &res.TruncationReason)
+}
+
+func (b *Budget) ApplyToRedisScanResult(res *RedisScanResult) {
+	applyBudgetTruncation(b, &res.Truncated, &res.TruncationReason)
+}
+
+func (b *Budget) ApplyToRedisGetResult(res *RedisGetResult) {
+	applyBudgetTruncation(b, &res.Truncated, &res.TruncationReason)
+}
+
+func (b *Budget) ApplyToRedisCommandResult(res *RedisCommandResult) {
+	applyBudgetTruncation(b, &res.Truncated, &res.TruncationReason)
+}
+
+func applyBudgetTruncation(b *Budget, truncated *bool, reason *string) {
+	if b == nil || !b.Truncated() {
+		return
+	}
+	*truncated = true
+	*reason = b.Reason()
+}
+
 func (b *Budget) Exhausted() bool {
 	return b != nil && b.limits.MaxResultBytes > 0 && b.usedBytes >= b.limits.MaxResultBytes
 }
@@ -62,7 +97,7 @@ func (b *Budget) NormalizeText(value string) string {
 		return value
 	}
 	if b.limits.MaxValueBytes > 0 && len(value) > b.limits.MaxValueBytes {
-		value = value[:b.limits.MaxValueBytes]
+		value = truncateUTF8(value, b.limits.MaxValueBytes)
 		b.AddReason("value_bytes")
 	}
 	if b.limits.MaxResultBytes <= 0 {
@@ -74,11 +109,25 @@ func (b *Budget) NormalizeText(value string) string {
 		return ""
 	}
 	if len(value) > remaining {
-		value = value[:remaining]
+		value = truncateUTF8(value, remaining)
 		b.AddReason("result_bytes")
 	}
 	b.usedBytes += len(value)
 	return value
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end]
 }
 
 func (b *Budget) AccountScalar(value any) any {
@@ -118,6 +167,7 @@ type DatasourceInfo struct {
 	Default     string   `json:"default,omitempty"`
 	Name        string   `json:"name,omitempty"`
 	Driver      string   `json:"driver,omitempty"`
+	Mode        string   `json:"mode,omitempty"`
 	Host        string   `json:"host,omitempty"`
 	Port        int      `json:"port,omitempty"`
 	Database    string   `json:"database,omitempty"`
@@ -125,6 +175,12 @@ type DatasourceInfo struct {
 	RedisDB     int      `json:"redis_db,omitempty"`
 	ReadOnly    bool     `json:"read_only,omitempty"`
 	Datasources []string `json:"datasources,omitempty"`
+}
+
+type TimeResult struct {
+	Datasource string `json:"datasource"`
+	Success    bool   `json:"success"`
+	Now        string `json:"now"`
 }
 
 type RedisScanResult struct {

@@ -23,35 +23,35 @@ type App struct {
 }
 
 type ExecuteSQLInput struct {
-	Datasource string `json:"datasource,omitempty" jsonschema:"datasource name; required when multiple datasources are configured"`
-	SQL        string `json:"sql" jsonschema:"single SQL statement to execute"`
-	MaxRows    int    `json:"max_rows,omitempty" jsonschema:"maximum rows returned for query statements"`
+	Datasource string
+	SQL        string
+	MaxRows    int
 }
 
 type TableInput struct {
-	Datasource string `json:"datasource,omitempty" jsonschema:"datasource name; defaults to config.default"`
-	Table      string `json:"table" jsonschema:"table name"`
-	Limit      int    `json:"limit,omitempty" jsonschema:"maximum sample rows"`
+	Datasource string
+	Table      string
+	Limit      int
 }
 
 type DatasourceInput struct {
-	Datasource string `json:"datasource,omitempty" jsonschema:"datasource name; defaults to config.default"`
+	Datasource string
 }
 
 type RedisKeyInput struct {
-	Datasource string `json:"datasource,omitempty" jsonschema:"datasource name; defaults to config.default"`
-	Key        string `json:"key" jsonschema:"redis key"`
+	Datasource string
+	Key        string
 }
 
 type RedisScanInput struct {
-	Datasource string `json:"datasource,omitempty" jsonschema:"datasource name; defaults to config.default"`
-	Pattern    string `json:"pattern,omitempty" jsonschema:"MATCH pattern; defaults to *"`
-	Count      int    `json:"count,omitempty" jsonschema:"maximum keys to return"`
+	Datasource string
+	Pattern    string
+	Count      int
 }
 
 type RedisCommandInput struct {
-	Datasource string   `json:"datasource,omitempty" jsonschema:"datasource name; required when multiple datasources are configured"`
-	Command    []string `json:"command" jsonschema:"redis command as argv, e.g. [\"GET\",\"foo\"]"`
+	Datasource string
+	Command    []string
 }
 
 func New(cfg config.Config, configPath string, registry *engine.Registry) *App {
@@ -92,7 +92,7 @@ func (a *App) ListDatasources(ctx context.Context, in struct{}) (result.Datasour
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return result.DatasourceInfo{Default: a.config.Default, Datasources: names, ReadOnly: a.config.ReadOnly}, nil
+	return result.DatasourceInfo{Default: a.config.Default, Datasources: names, Mode: a.config.Mode, ReadOnly: a.config.ReadOnly}, nil
 }
 
 func (a *App) CurrentDatasource(ctx context.Context, in DatasourceInput) (result.DatasourceInfo, error) {
@@ -105,6 +105,7 @@ func (a *App) CurrentDatasource(ctx context.Context, in DatasourceInput) (result
 		Default:  a.config.Default,
 		Name:     name,
 		Driver:   ds.Driver,
+		Mode:     a.config.Mode,
 		Host:     ds.Host,
 		Port:     ds.Port,
 		Database: ds.Database,
@@ -117,15 +118,15 @@ func (a *App) CurrentDatasource(ctx context.Context, in DatasourceInput) (result
 	return info, nil
 }
 
-func (a *App) GetCurrentTime(ctx context.Context, in DatasourceInput) (result.SQLResult, error) {
+func (a *App) GetCurrentTime(ctx context.Context, in DatasourceInput) (result.TimeResult, error) {
 	name := policy.DatasourceName(in.Datasource, a.config.Default)
 	eng, err := a.engineFor(name)
 	if err != nil {
-		return result.SQLResult{}, err
+		return result.TimeResult{}, err
 	}
 	res, err := eng.CurrentTime(ctx)
 	if err != nil {
-		return result.SQLResult{}, err
+		return result.TimeResult{}, err
 	}
 	res.Datasource = name
 	return res, nil

@@ -1,5 +1,10 @@
 # 多数据库 MCP 架构方案（ob-mcp → 多引擎）
 
+> Status: historical / partly superseded by current code. The current source,
+> README, tests, `docs/plans/2026-06-05-db-mcp-best-improvement-plan.md`, and
+> `docs/plans/2026-06-05-db-mcp-architecture-improvement-plan.md` are the
+> authoritative references for active work.
+
 > Mode: Plan · Depth: Standard+ · 本次已读源（均 verified）：`main.go`、`README.md`、`go.mod`、`examples/ob-mcp.toml.example`
 > 范围约定：**只出架构方案，先不写代码**。下文代码片段仅为接口示意。
 

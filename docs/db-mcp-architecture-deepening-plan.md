@@ -1,5 +1,9 @@
 # db-mcp 架构深化最佳改进方案
 
+Status: architecture split implemented / follow-up deepening implemented in
+`docs/plans/2026-06-05-db-mcp-architecture-improvement-plan.md`. Prefer current
+source, README, tests, and the latest plan for active work.
+
 Mode: Plan
 Depth: Deep
 Input sources read: `first-principles-planner/SKILL.md`, `first-principles-planner/REFERENCE.md`, `README.md`, `docs/db-mcp-hardening-plan.md`, `docs/multi-db-mcp-architecture.md`, architecture review HTML report, repository file listing, `go.mod`, `.gitignore`, `examples/db-mcp.toml.example`, function/test outline from `main.go`, `engine.go`, `redis.go`, `limits.go`, `*_test.go`

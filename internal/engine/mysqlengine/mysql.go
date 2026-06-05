@@ -66,8 +66,15 @@ func (e *sqlEngine) Kind() string { return e.kind }
 
 func (e *sqlEngine) Close() error { return e.db.Close() }
 
-func (e *sqlEngine) CurrentTime(ctx context.Context) (result.SQLResult, error) {
-	return e.Query(ctx, "SELECT NOW() AS now", 1)
+func (e *sqlEngine) CurrentTime(ctx context.Context) (result.TimeResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, e.queryTimeout)
+	defer cancel()
+
+	var now time.Time
+	if err := e.db.QueryRowContext(ctx, "SELECT NOW()").Scan(&now); err != nil {
+		return result.TimeResult{}, err
+	}
+	return result.TimeResult{Success: true, Now: now.Format("2006-01-02 15:04:05")}, nil
 }
 
 func (e *sqlEngine) ListTables(ctx context.Context, maxRows int) (result.SQLResult, error) {
@@ -115,8 +122,7 @@ func (e *sqlEngine) Query(ctx context.Context, sqlText string, maxRows int) (res
 
 	for rows.Next() {
 		if res.Rows >= maxRows {
-			res.Truncated = true
-			res.TruncationReason = "row_count"
+			budget.MarkRowCount()
 			break
 		}
 		if err := rows.Scan(scanTargets...); err != nil {
@@ -129,14 +135,13 @@ func (e *sqlEngine) Query(ctx context.Context, sqlText string, maxRows int) (res
 		res.Data = append(res.Data, row)
 		res.Rows++
 		if budget.Truncated() {
-			res.Truncated = true
-			res.TruncationReason = budget.Reason()
 			break
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return result.SQLResult{}, err
 	}
+	budget.ApplyToSQLResult(&res)
 	return res, nil
 }
 
@@ -151,21 +156,29 @@ func (e *sqlEngine) Exec(ctx context.Context, sqlText string) (result.SQLResult,
 	rowsAffected, _ := res.RowsAffected()
 	budget := result.NewBudget(e.limits)
 	sqlPreview := budget.NormalizeText(sqlText)
-	return result.SQLResult{
-		SQL:              sqlPreview,
-		Success:          true,
-		RowsAffected:     rowsAffected,
-		Truncated:        budget.Truncated(),
-		TruncationReason: budget.Reason(),
-	}, nil
+	out := result.SQLResult{
+		SQL:          sqlPreview,
+		Success:      true,
+		RowsAffected: rowsAffected,
+	}
+	budget.ApplyToSQLResult(&out)
+	return out, nil
 }
 
 var identPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 func quoteIdentifier(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if !identPattern.MatchString(name) {
+	parts := strings.Split(name, ".")
+	if len(parts) == 0 || len(parts) > 2 {
 		return "", fmt.Errorf("invalid identifier %q", name)
 	}
-	return "`" + name + "`", nil
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if !identPattern.MatchString(part) {
+			return "", fmt.Errorf("invalid identifier %q", name)
+		}
+		quoted = append(quoted, "`"+part+"`")
+	}
+	return strings.Join(quoted, "."), nil
 }
