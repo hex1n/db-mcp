@@ -329,7 +329,7 @@ func TestReadOnlyRejectsBypasses(t *testing.T) {
 
 	for _, sqlText := range []string{
 		"WITH cte AS (SELECT 1) DELETE FROM users",
-		"WITH cte AS (SELECT 1) SELECT * FROM cte",
+		"EXPLAIN ANALYZE DELETE FROM users",
 		"SELECT * FROM users INTO OUTFILE '/tmp/x'",
 	} {
 		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{

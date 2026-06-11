@@ -60,7 +60,7 @@ func buildToolCatalog(cfg config.Config, cats map[string]bool) []toolSpec {
 func executeSQLDescription(mode string) string {
 	desc := "Execute one SQL statement on the selected test SQL datasource."
 	if mode == config.ModeInspect {
-		return desc + " Inspect mode is ON: only SELECT/SHOW/DESC/DESCRIBE/EXPLAIN are accepted; CTE/WITH and writes are rejected."
+		return desc + " Inspect mode is ON: only reads are accepted (SELECT/SHOW/DESC/DESCRIBE/EXPLAIN and read-only WITH CTEs); writes and EXPLAIN ANALYZE are rejected and the DB session is read-only."
 	}
 	return desc + " Operate mode is ON: write statements are enabled and should only be used after explicit user confirmation."
 }

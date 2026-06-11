@@ -45,6 +45,12 @@ func newSQLEngine(ds config.DatasourceConfig, cfg config.Config) (*sqlEngine, er
 	dsn.ReadTimeout = time.Duration(cfg.QueryTimeoutSeconds) * time.Second
 	dsn.WriteTimeout = time.Duration(cfg.QueryTimeoutSeconds) * time.Second
 	dsn.Params = map[string]string{"charset": "utf8mb4"}
+	if cfg.ReadOnly {
+		// Defense in depth: make the DB session itself reject writes so a
+		// statement that slips past the policy classifier (e.g. a
+		// side-effecting function) still cannot mutate data in inspect mode.
+		dsn.Params["transaction_read_only"] = "1"
+	}
 
 	db, err := sql.Open("mysql", dsn.FormatDSN())
 	if err != nil {
@@ -134,7 +140,10 @@ func (e *sqlEngine) Query(ctx context.Context, sqlText string, maxRows int) (res
 		}
 		res.Data = append(res.Data, row)
 		res.Rows++
-		if budget.Truncated() {
+		// Stop only when the overall result-byte budget is spent. A single
+		// oversized cell is truncated in place (value_bytes) but must not cut
+		// the row scan short.
+		if budget.Exhausted() {
 			break
 		}
 	}

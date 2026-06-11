@@ -8,7 +8,11 @@ import (
 )
 
 func TestIsReadOnlyStatement(t *testing.T) {
-	readOnly := []string{"SELECT 1", "  select * from t", "SHOW TABLES", "DESCRIBE t", "EXPLAIN SELECT 1"}
+	readOnly := []string{
+		"SELECT 1", "  select * from t", "SHOW TABLES", "DESCRIBE t", "EXPLAIN SELECT 1",
+		"EXPLAIN UPDATE t SET x=1", // plain EXPLAIN only plans, never executes
+		"WITH c AS (SELECT 1) SELECT * FROM c",
+	}
 	for _, s := range readOnly {
 		if !IsReadOnlyStatement(s) {
 			t.Errorf("expected read-only: %q", s)
@@ -17,7 +21,8 @@ func TestIsReadOnlyStatement(t *testing.T) {
 	writes := []string{
 		"DELETE FROM t", "UPDATE t SET x=1", "INSERT INTO t VALUES (1)",
 		"WITH c AS (SELECT 1) DELETE FROM t",
-		"WITH c AS (SELECT 1) SELECT * FROM c",
+		"EXPLAIN ANALYZE DELETE FROM t", // ANALYZE actually runs the statement
+		"explain analyze update t set x=1",
 		"SELECT * FROM t INTO OUTFILE '/tmp/x'",
 		"select * from t into dumpfile '/tmp/x'",
 		"",

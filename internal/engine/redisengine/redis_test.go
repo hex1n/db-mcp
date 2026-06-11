@@ -66,4 +66,41 @@ func TestRedisLiveSmoke(t *testing.T) {
 	if scanRes.Count == 0 {
 		t.Fatalf("redis scan did not find smoke key: %+v", scanRes)
 	}
+
+	assertValueByteTruncationKeepsSiblings(t, host, port)
+}
+
+// assertValueByteTruncationKeepsSiblings guards the budget regression where a
+// single oversized element used to cut the whole read short: with a small
+// max_value_bytes, an over-long hash value must be truncated in place while its
+// sibling fields are still returned.
+func assertValueByteTruncationKeepsSiblings(t *testing.T, host string, port int) {
+	t.Helper()
+	eng, err := newRedisEngine(
+		config.DatasourceConfig{Driver: "redis", Host: host, Port: port},
+		config.Config{MaxRows: 500, MaxValueBytes: 4, MaxResultBytes: 1 << 20, QueryTimeoutSeconds: 30},
+	)
+	if err != nil {
+		t.Fatalf("create redis engine: %v", err)
+	}
+	defer eng.Close()
+	ctx := context.Background()
+
+	const key = "dbmcp:smoke:hash"
+	if _, err := eng.Command(ctx, []string{"HSET", key, "a", "1", "b", "this-value-is-long", "c", "3"}); err != nil {
+		t.Fatalf("HSET smoke hash: %v", err)
+	}
+	defer func() { _, _ = eng.Command(context.Background(), []string{"DEL", key}) }()
+
+	getRes, err := eng.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("redis get hash: %v", err)
+	}
+	fields, ok := getRes.Value.(map[string]any)
+	if !ok || len(fields) != 3 {
+		t.Fatalf("expected all 3 hash fields despite value truncation, got %#v", getRes.Value)
+	}
+	if !getRes.Truncated || !strings.Contains(getRes.TruncationReason, "value_bytes") {
+		t.Fatalf("expected value_bytes truncation flag, got %+v", getRes)
+	}
 }

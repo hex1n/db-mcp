@@ -172,12 +172,13 @@ properties_prefix = "db.project"
 
 在顶层设置 `mode = "inspect"`，即可在服务端拒绝变更：
 
-- `execute_sql` 只接受 `SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN`。`WITH`/CTE 语句会被拒绝（CTE 可能包裹 `DELETE`/`UPDATE`），`SELECT ... INTO OUTFILE`/`DUMPFILE` 也会被拒绝。
+- `execute_sql` 只接受读语句：`SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN` 以及只读的 `WITH` CTE（包裹 `INSERT`/`UPDATE`/`DELETE`/`REPLACE` 的 CTE 会被拒绝）。`EXPLAIN ANALYZE`（会真正执行语句）和 `SELECT ... INTO OUTFILE`/`DUMPFILE` 也会被拒绝。
+- 对 SQL 引擎，inspect 模式还会以只读会话（`transaction_read_only`）建立连接，因此即使有语句绕过分类器（例如带副作用的函数），数据库本身也会拒绝写入。
 - `redis_command` 只接受小结果的元数据读取，或由参数限定结果大小的读取（`PING`、`TIME`、`TYPE`、`TTL`、`EXISTS`、`STRLEN`、`GETRANGE`、`HLEN`、`LLEN`、`SCARD`、`ZCARD` 等）。写命令以及结果可能被数据或参数放大的原生命令（`SET`/`DEL`/`FLUSHALL`、`KEYS`、`SCAN`、`MGET`、`HGETALL`、`SMEMBERS`、`LRANGE`、`ZRANGE`、`HSCAN` 等）会被拒绝；请使用 `redis_get`/`redis_scan` 进行有边界的数据读取。
 - 内置只读工具（`list_tables`、`redis_get` 等）不受影响。
 - 写工具即使在此模式下仍保留 `destructiveHint`，所以客户端仍会在运行前提示。inspect 模式是防护，不是保证。
 
-这是尽力而为的语句级防护，它不会解析 SQL，因此无法捕获 `SELECT` 内有副作用的函数。结果预算也发生在数据库客户端产出值之后，所以非常大的 SQL 单元格仍可能在被截断成 MCP 输出前消耗 driver 内存。若需要硬保证，请同时使用只读数据库账号，或 Redis ACL/只读副本。
+SQL 语句分类器是一道快速的第一层防护，并不完整解析 SQL。SQL 引擎上由只读 DB 会话兜底，但这依赖引擎遵守 `transaction_read_only`（MySQL 保证；OceanBase MySQL 模式接受该变量）。`redis_command` 没有等价的服务端兜底，其允许清单即是防线。结果预算也发生在数据库客户端产出值之后，所以非常大的 SQL 单元格仍可能在被截断成 MCP 输出前消耗 driver 内存。若需要硬保证，请同时使用只读数据库账号，或 Redis ACL/只读副本。
 
 只有在本地测试库明确允许原生命令/写操作时才使用 `mode = "operate"`。operate 模式下，`execute_sql` 和 `redis_command` 在配置多个数据源时仍必须显式传入 `datasource`，且两个工具仍保留 `destructiveHint`。
 

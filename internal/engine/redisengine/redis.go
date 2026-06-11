@@ -99,7 +99,7 @@ func (e *redisEngine) Scan(parent context.Context, pattern string, count int) (r
 			break
 		}
 		keys = append(keys, budget.NormalizeText(iter.Val()))
-		if budget.Truncated() {
+		if budget.Exhausted() {
 			break
 		}
 	}
@@ -202,7 +202,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 				break
 			}
 			members = append(members, budget.NormalizeText(iter.Val()))
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}
@@ -231,7 +231,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			field = budget.NormalizeText(field)
 			m[field] = result.NormalizeRedisValue(value, budget)
 			returned++
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}
@@ -252,7 +252,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 		members := make([]map[string]any, 0, len(z))
 		for _, item := range z {
 			members = append(members, map[string]any{"member": result.NormalizeRedisValue(item.Member, budget), "score": budget.AccountScalar(item.Score)})
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}

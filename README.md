@@ -199,9 +199,14 @@ properties_prefix = "db.project"
 
 Set `mode = "inspect"` at the top level to refuse mutations server-side:
 
-- `execute_sql` accepts only `SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN`. `WITH`/
-  CTE statements are rejected (a CTE can wrap `DELETE`/`UPDATE`), as is
-  `SELECT ... INTO OUTFILE`/`DUMPFILE`.
+- `execute_sql` accepts only reads: `SELECT`/`SHOW`/`DESC`/`DESCRIBE`/`EXPLAIN`
+  and read-only `WITH` CTEs (a CTE wrapping `INSERT`/`UPDATE`/`DELETE`/`REPLACE`
+  is rejected). `EXPLAIN ANALYZE` (which actually runs the statement) and
+  `SELECT ... INTO OUTFILE`/`DUMPFILE` are also rejected.
+- For SQL engines, inspect mode additionally opens the connection with a
+  read-only session (`transaction_read_only`), so the database itself rejects
+  any write that slips past the statement classifier (e.g. a side-effecting
+  function).
 - `redis_command` accepts only small-result metadata reads or argument-bounded
   reads (`PING`, `TIME`, `TYPE`, `TTL`, `EXISTS`, `STRLEN`, `GETRANGE`, `HLEN`,
   `LLEN`, `SCARD`, `ZCARD`, ...). Writes and raw commands whose result can be
@@ -212,12 +217,14 @@ Set `mode = "inspect"` at the top level to refuse mutations server-side:
 - The write tools keep their `destructiveHint` even in this mode, so clients
   still prompt before running them — inspect mode is a guard, not a guarantee.
 
-This is a best-effort statement-level guard — it does not parse SQL, so a
-side-effecting function inside a `SELECT` is not caught. Result budgets also run
-after the database client has produced values, so very large SQL cells may still
-consume driver memory before they are truncated for MCP output. For a hard
-guarantee, also use a read-only database account or a Redis ACL/read-only
-replica.
+The SQL statement classifier is a fast first line of defense and does not parse
+SQL fully. On SQL engines the read-only DB session backs it up, but it depends
+on the engine honoring `transaction_read_only` (guaranteed on MySQL; OceanBase
+MySQL mode accepts it). `redis_command` has no equivalent server-side backstop,
+so its allowlist is the guard. Result budgets also run after the database client
+has produced values, so very large SQL cells may still consume driver memory
+before they are truncated for MCP output. For a hard guarantee, also use a
+read-only database account or a Redis ACL/read-only replica.
 
 Use `mode = "operate"` only for local test databases where raw/write statements
 and Redis commands are intentionally available. In operate mode,
