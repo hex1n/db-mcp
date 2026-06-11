@@ -33,7 +33,7 @@ Shared (always available):
 
 - `list_datasources`
 - `current_datasource`
-- `get_current_time`
+- `get_current_time` (RFC3339 timestamp with timezone offset)
 
 SQL engines (`mysql`, `oceanbase`) — registered when a SQL datasource exists:
 
@@ -346,13 +346,15 @@ DB_MCP_TEST_REDIS=127.0.0.1:6379 \
 go test -run TestRedisLiveSmoke ./internal/engine/redisengine
 ```
 
-CI runs the local checks on Linux, macOS, and Windows. It also runs MySQL and
-Redis live smoke tests on Linux service containers. OceanBase remains an
+CI runs the local checks on Linux, macOS, and Windows, with the race detector
+and coverage on Linux/macOS, plus a `staticcheck` lint job. It also runs MySQL
+and Redis live smoke tests on Linux service containers. OceanBase remains an
 environment-triggered smoke test because it requires a compatible external test
 instance.
 
 Before tagging a release, verify that `main` is green in CI. The release
-workflow packages the same `./cmd/db-mcp` binary path documented above.
+workflow runs `go vet`/`go test` first and only builds and publishes if they
+pass, and packages the same `./cmd/db-mcp` binary path documented above.
 
 ## Boundaries
 

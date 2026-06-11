@@ -16,12 +16,17 @@ func DatasourceName(name, defaultName string) string {
 	return strings.TrimSpace(name)
 }
 
-func DatasourceNameForTool(tool, name string, datasourceCount int, defaultName string) (string, error) {
+// DatasourceNameForTool resolves the datasource for a tool call. When the name
+// is empty it falls back to defaultName, unless requireExplicit is set (the
+// caller's rule for tools that must not guess, e.g. writes with multiple
+// datasources configured). The tool argument is only an error label, so policy
+// stays decoupled from the concrete tool names.
+func DatasourceNameForTool(tool, name string, requireExplicit bool, defaultName string) (string, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed != "" {
 		return trimmed, nil
 	}
-	if (tool == "execute_sql" || tool == "redis_command") && datasourceCount > 1 {
+	if requireExplicit {
 		return "", fmt.Errorf("%s requires explicit datasource when multiple datasources are configured", tool)
 	}
 	return defaultName, nil

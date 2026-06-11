@@ -78,6 +78,9 @@ func runSQLLiveSmoke(t *testing.T, envPrefix, driver string) {
 	if !timeRes.Success || timeRes.Now == "" {
 		t.Fatalf("unexpected current time result: %+v", timeRes)
 	}
+	if !strings.Contains(timeRes.Now, "T") || timeRes.Timezone == "" {
+		t.Fatalf("current time should be RFC3339 with a timezone offset, got %+v", timeRes)
+	}
 
 	queryRes, err := eng.Query(ctx, "select database() as db_name, now() as db_time", 1)
 	if err != nil {

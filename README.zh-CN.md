@@ -28,7 +28,7 @@
 
 - `list_datasources`
 - `current_datasource`
-- `get_current_time`
+- `get_current_time`(带时区偏移的 RFC3339 时间戳)
 
 SQL 引擎（`mysql`、`oceanbase`）-- 存在 SQL 数据源时注册：
 
@@ -293,9 +293,9 @@ DB_MCP_TEST_REDIS=127.0.0.1:6379 \
 go test -run TestRedisLiveSmoke ./internal/engine/redisengine
 ```
 
-CI 会在 Linux、macOS 和 Windows 上运行本地检查，并在 Linux service containers 上运行 MySQL 与 Redis 真实连接 smoke tests。OceanBase 仍保留为环境变量触发的 smoke test，因为它需要兼容的外部测试实例。
+CI 会在 Linux、macOS 和 Windows 上运行本地检查,其中 Linux/macOS 还会开启竞态检测器(`-race`)和覆盖率,另有一个 `staticcheck` lint job;并在 Linux service containers 上运行 MySQL 与 Redis 真实连接 smoke tests。OceanBase 仍保留为环境变量触发的 smoke test,因为它需要兼容的外部测试实例。
 
-发布 tag 前，请确认 `main` 的 CI 为绿色。release workflow 会打包上文同一个 `./cmd/db-mcp` 二进制路径。
+发布 tag 前,请确认 `main` 的 CI 为绿色。release workflow 会先跑 `go vet`/`go test`,通过后才构建并发布,并打包上文同一个 `./cmd/db-mcp` 二进制路径。
 
 ## 边界
 

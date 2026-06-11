@@ -35,7 +35,7 @@ func buildToolCatalog(cfg config.Config, cats map[string]bool) []toolSpec {
 	specs := []toolSpec{
 		{Name: toolListDatasources, Title: "List Datasources", Description: "List configured datasources without connecting to them.", Annotations: readOnlyAnnotations()},
 		{Name: toolCurrentDatasource, Title: "Current Datasource", Description: "Show resolved connection information for one datasource without exposing its password.", Annotations: readOnlyAnnotations()},
-		{Name: toolGetCurrentTime, Title: "Current Time", Description: "Get current server time for the selected datasource.", Annotations: readOnlyAnnotations()},
+		{Name: toolGetCurrentTime, Title: "Current Time", Description: "Get current server time for the selected datasource as an RFC3339 timestamp with timezone offset.", Annotations: readOnlyAnnotations()},
 	}
 	if cats[engine.CategorySQL] {
 		specs = append(specs,
