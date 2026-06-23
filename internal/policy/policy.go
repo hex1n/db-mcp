@@ -16,12 +16,17 @@ func DatasourceName(name, defaultName string) string {
 	return strings.TrimSpace(name)
 }
 
-func DatasourceNameForTool(tool, name string, datasourceCount int, defaultName string) (string, error) {
+// DatasourceNameForTool resolves the datasource for a tool call. When the name
+// is empty it falls back to defaultName, unless requireExplicit is set (the
+// caller's rule for tools that must not guess, e.g. writes with multiple
+// datasources configured). The tool argument is only an error label, so policy
+// stays decoupled from the concrete tool names.
+func DatasourceNameForTool(tool, name string, requireExplicit bool, defaultName string) (string, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed != "" {
 		return trimmed, nil
 	}
-	if (tool == "execute_sql" || tool == "redis_command") && datasourceCount > 1 {
+	if requireExplicit {
 		return "", fmt.Errorf("%s requires explicit datasource when multiple datasources are configured", tool)
 	}
 	return defaultName, nil
@@ -53,6 +58,14 @@ func IsQueryStatement(sqlText string) bool {
 
 var selectIntoFilePattern = regexp.MustCompile(`(?i)\binto\s+(outfile|dumpfile)\b`)
 
+// writeStatementPattern matches DML verbs that can be the main statement of a
+// `WITH ... <write>` CTE (MySQL allows WITH to precede SELECT/UPDATE/DELETE).
+var writeStatementPattern = regexp.MustCompile(`(?i)\b(insert|update|delete|replace)\b`)
+
+// IsReadOnlyStatement reports whether a statement is a guaranteed read. It is a
+// fast, engine-agnostic first line of defense; in inspect mode the SQL engine
+// additionally enforces a read-only DB session so a statement that slips past
+// this classifier (e.g. a side-effecting function) is still rejected.
 func IsReadOnlyStatement(sqlText string) bool {
 	trimmed := strings.TrimSpace(strings.TrimLeft(sqlText, "(\ufeff"))
 	fields := strings.Fields(trimmed)
@@ -60,11 +73,23 @@ func IsReadOnlyStatement(sqlText string) bool {
 		return false
 	}
 	switch strings.ToLower(fields[0]) {
-	case "select", "show", "desc", "describe", "explain":
+	case "select", "show", "desc", "describe":
+		return !selectIntoFilePattern.MatchString(trimmed)
+	case "explain":
+		// Plain EXPLAIN/DESCRIBE only builds a plan and never executes the
+		// inner statement, so `EXPLAIN UPDATE ...` is safe. EXPLAIN ANALYZE
+		// (MySQL 8.0.18+) actually runs the statement, so it is rejected.
+		if len(fields) >= 2 && strings.EqualFold(fields[1], "analyze") {
+			return false
+		}
+		return !selectIntoFilePattern.MatchString(trimmed)
+	case "with":
+		// Read-only CTE. Allowed only when it carries no DML verb so a
+		// `WITH ... DELETE` cannot slip through the read-only gate.
+		return !writeStatementPattern.MatchString(trimmed) && !selectIntoFilePattern.MatchString(trimmed)
 	default:
 		return false
 	}
-	return !selectIntoFilePattern.MatchString(trimmed)
 }
 
 type redisReadOnlyCommandRule struct {

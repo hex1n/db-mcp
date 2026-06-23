@@ -35,7 +35,7 @@ func buildToolCatalog(cfg config.Config, cats map[string]bool) []toolSpec {
 	specs := []toolSpec{
 		{Name: toolListDatasources, Title: "List Datasources", Description: "List configured datasources without connecting to them.", Annotations: readOnlyAnnotations()},
 		{Name: toolCurrentDatasource, Title: "Current Datasource", Description: "Show resolved connection information for one datasource without exposing its password.", Annotations: readOnlyAnnotations()},
-		{Name: toolGetCurrentTime, Title: "Current Time", Description: "Get current server time for the selected datasource.", Annotations: readOnlyAnnotations()},
+		{Name: toolGetCurrentTime, Title: "Current Time", Description: "Get current server time for the selected datasource as an RFC3339 timestamp with timezone offset.", Annotations: readOnlyAnnotations()},
 	}
 	if cats[engine.CategorySQL] {
 		specs = append(specs,
@@ -60,7 +60,7 @@ func buildToolCatalog(cfg config.Config, cats map[string]bool) []toolSpec {
 func executeSQLDescription(mode string) string {
 	desc := "Execute one SQL statement on the selected test SQL datasource."
 	if mode == config.ModeInspect {
-		return desc + " Inspect mode is ON: only SELECT/SHOW/DESC/DESCRIBE/EXPLAIN are accepted; CTE/WITH and writes are rejected."
+		return desc + " Inspect mode is ON: only reads are accepted (SELECT/SHOW/DESC/DESCRIBE/EXPLAIN and read-only WITH CTEs); writes and EXPLAIN ANALYZE are rejected and the DB session is read-only."
 	}
 	return desc + " Operate mode is ON: write statements are enabled and should only be used after explicit user confirmation."
 }

@@ -184,7 +184,7 @@ func (a *App) ExecuteSQL(ctx context.Context, in ExecuteSQLInput) (result.SQLRes
 	if sqlText == "" {
 		return result.SQLResult{}, errors.New("sql is required")
 	}
-	name, err := policy.DatasourceNameForTool("execute_sql", in.Datasource, len(a.config.Datasources), a.config.Default)
+	name, err := policy.DatasourceNameForTool("execute_sql", in.Datasource, len(a.config.Datasources) > 1, a.config.Default)
 	if err != nil {
 		return result.SQLResult{}, err
 	}
@@ -266,7 +266,7 @@ func (a *App) RedisTTL(ctx context.Context, in RedisKeyInput) (result.RedisTTLRe
 }
 
 func (a *App) RedisCommand(ctx context.Context, in RedisCommandInput) (result.RedisCommandResult, error) {
-	name, err := policy.DatasourceNameForTool("redis_command", in.Datasource, len(a.config.Datasources), a.config.Default)
+	name, err := policy.DatasourceNameForTool("redis_command", in.Datasource, len(a.config.Datasources) > 1, a.config.Default)
 	if err != nil {
 		return result.RedisCommandResult{}, err
 	}

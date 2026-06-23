@@ -79,7 +79,9 @@ func (e *redisEngine) CurrentTime(parent context.Context) (result.TimeResult, er
 	if err != nil {
 		return result.TimeResult{}, err
 	}
-	return result.TimeResult{Success: true, Now: tm.Format("2006-01-02 15:04:05")}, nil
+	// Redis TIME is an absolute Unix epoch, so any zone renders the same
+	// instant; emit RFC3339 with the offset to keep it unambiguous.
+	return result.TimeResult{Success: true, Now: tm.Format(time.RFC3339), Timezone: tm.Format("-07:00")}, nil
 }
 
 func (e *redisEngine) Scan(parent context.Context, pattern string, count int) (result.RedisScanResult, error) {
@@ -99,7 +101,7 @@ func (e *redisEngine) Scan(parent context.Context, pattern string, count int) (r
 			break
 		}
 		keys = append(keys, budget.NormalizeText(iter.Val()))
-		if budget.Truncated() {
+		if budget.Exhausted() {
 			break
 		}
 	}
@@ -202,7 +204,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 				break
 			}
 			members = append(members, budget.NormalizeText(iter.Val()))
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}
@@ -231,7 +233,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 			field = budget.NormalizeText(field)
 			m[field] = result.NormalizeRedisValue(value, budget)
 			returned++
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}
@@ -252,7 +254,7 @@ func (e *redisEngine) Get(parent context.Context, key string) (result.RedisGetRe
 		members := make([]map[string]any, 0, len(z))
 		for _, item := range z {
 			members = append(members, map[string]any{"member": result.NormalizeRedisValue(item.Member, budget), "score": budget.AccountScalar(item.Score)})
-			if budget.Truncated() {
+			if budget.Exhausted() {
 				break
 			}
 		}

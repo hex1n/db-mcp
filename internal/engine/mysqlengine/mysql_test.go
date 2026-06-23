@@ -78,6 +78,9 @@ func runSQLLiveSmoke(t *testing.T, envPrefix, driver string) {
 	if !timeRes.Success || timeRes.Now == "" {
 		t.Fatalf("unexpected current time result: %+v", timeRes)
 	}
+	if !strings.Contains(timeRes.Now, "T") || timeRes.Timezone == "" {
+		t.Fatalf("current time should be RFC3339 with a timezone offset, got %+v", timeRes)
+	}
 
 	queryRes, err := eng.Query(ctx, "select database() as db_name, now() as db_time", 1)
 	if err != nil {
@@ -85,6 +88,30 @@ func runSQLLiveSmoke(t *testing.T, envPrefix, driver string) {
 	}
 	if !queryRes.Success || !containsString(queryRes.Columns, "db_name") || !containsString(queryRes.Columns, "db_time") {
 		t.Fatalf("query smoke columns = %+v", queryRes)
+	}
+
+	assertInspectModeIsReadOnly(t, ds)
+}
+
+// assertInspectModeIsReadOnly verifies that inspect mode enforces a read-only
+// session at the DB, not merely via the policy classifier: a write reaching the
+// engine directly must still be rejected by the server.
+func assertInspectModeIsReadOnly(t *testing.T, ds config.DatasourceConfig) {
+	t.Helper()
+	eng, err := newSQLEngine(ds, config.Config{MaxRows: 10, QueryTimeoutSeconds: 30, Mode: config.ModeInspect})
+	if err != nil {
+		t.Fatalf("create inspect-mode sql engine: %v", err)
+	}
+	defer eng.Close()
+
+	const probe = "dbmcp_readonly_probe"
+	if _, err := eng.Exec(context.Background(), "CREATE TABLE "+probe+" (id int)"); err == nil {
+		// The guard failed: drop the table we should not have been able to create.
+		if op, oerr := newSQLEngine(ds, config.Config{MaxRows: 10, QueryTimeoutSeconds: 30, Mode: config.ModeOperate}); oerr == nil {
+			_, _ = op.Exec(context.Background(), "DROP TABLE IF EXISTS "+probe)
+			_ = op.Close()
+		}
+		t.Fatalf("inspect mode must reject writes at the DB session, but CREATE TABLE succeeded")
 	}
 }
 

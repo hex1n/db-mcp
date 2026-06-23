@@ -45,6 +45,12 @@ func newSQLEngine(ds config.DatasourceConfig, cfg config.Config) (*sqlEngine, er
 	dsn.ReadTimeout = time.Duration(cfg.QueryTimeoutSeconds) * time.Second
 	dsn.WriteTimeout = time.Duration(cfg.QueryTimeoutSeconds) * time.Second
 	dsn.Params = map[string]string{"charset": "utf8mb4"}
+	if cfg.ReadOnly {
+		// Defense in depth: make the DB session itself reject writes so a
+		// statement that slips past the policy classifier (e.g. a
+		// side-effecting function) still cannot mutate data in inspect mode.
+		dsn.Params["transaction_read_only"] = "1"
+	}
 
 	db, err := sql.Open("mysql", dsn.FormatDSN())
 	if err != nil {
@@ -70,11 +76,37 @@ func (e *sqlEngine) CurrentTime(ctx context.Context) (result.TimeResult, error) 
 	ctx, cancel := context.WithTimeout(ctx, e.queryTimeout)
 	defer cancel()
 
-	var now time.Time
-	if err := e.db.QueryRowContext(ctx, "SELECT NOW()").Scan(&now); err != nil {
+	// Format on the DB side to get the server wall-clock digits, and derive the
+	// zone offset from the server's own UTC delta. This sidesteps the driver
+	// tagging DATETIME values with its configured Loc (UTC by default), which
+	// would otherwise mislabel the offset.
+	var nowText, utcDelta string
+	const q = "SELECT DATE_FORMAT(NOW(), '%Y-%m-%dT%H:%i:%s'), TIMEDIFF(NOW(), UTC_TIMESTAMP())"
+	if err := e.db.QueryRowContext(ctx, q).Scan(&nowText, &utcDelta); err != nil {
 		return result.TimeResult{}, err
 	}
-	return result.TimeResult{Success: true, Now: now.Format("2006-01-02 15:04:05")}, nil
+	tz := normalizeTZOffset(utcDelta)
+	return result.TimeResult{Success: true, Now: nowText + tz, Timezone: tz}, nil
+}
+
+// normalizeTZOffset converts a MySQL TIMEDIFF value such as "08:00:00" or
+// "-05:00:00" into an ISO-8601 zone offset like "+08:00" / "-05:00".
+func normalizeTZOffset(delta string) string {
+	delta = strings.TrimSpace(delta)
+	sign := "+"
+	if strings.HasPrefix(delta, "-") {
+		sign = "-"
+		delta = delta[1:]
+	}
+	parts := strings.SplitN(delta, ":", 3)
+	if len(parts) < 2 {
+		return "+00:00"
+	}
+	hh, mm := parts[0], parts[1]
+	if len(hh) < 2 {
+		hh = "0" + hh
+	}
+	return sign + hh + ":" + mm
 }
 
 func (e *sqlEngine) ListTables(ctx context.Context, maxRows int) (result.SQLResult, error) {
@@ -134,7 +166,10 @@ func (e *sqlEngine) Query(ctx context.Context, sqlText string, maxRows int) (res
 		}
 		res.Data = append(res.Data, row)
 		res.Rows++
-		if budget.Truncated() {
+		// Stop only when the overall result-byte budget is spent. A single
+		// oversized cell is truncated in place (value_bytes) but must not cut
+		// the row scan short.
+		if budget.Exhausted() {
 			break
 		}
 	}

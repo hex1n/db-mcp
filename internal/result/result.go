@@ -181,6 +181,7 @@ type TimeResult struct {
 	Datasource string `json:"datasource"`
 	Success    bool   `json:"success"`
 	Now        string `json:"now"`
+	Timezone   string `json:"timezone,omitempty"`
 }
 
 type RedisScanResult struct {
