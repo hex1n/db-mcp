@@ -161,6 +161,10 @@ General notes:
 - `max_rows` limits rows or collection elements, not bytes. `max_value_bytes` caps
   each returned value preview, and `max_result_bytes` caps the returned MCP payload
   on a best-effort basis. A `truncated` response is a preview, not full data.
+- Integer values (e.g. `BIGINT`, Redis counters) are returned as JSON strings, not
+  JSON numbers. JSON numbers are parsed as IEEE-754 doubles by many MCP clients, so
+  any integer beyond ±2^53-1 (a BIGINT id, a snowflake key) would otherwise lose
+  precision on the wire. Floats and `DECIMAL` keep their existing representation.
 - `mode = "inspect"` restricts `execute_sql` and `redis_command` to bounded reads.
   `mode = "operate"` keeps raw/write capabilities enabled. If `mode` is omitted,
   db-mcp uses `operate` for backward compatibility.

@@ -140,6 +140,7 @@ redis_db = 0
 
 - 配置多个数据源时必须设置 `default`。只有一个数据源时可以省略，此时会解析为该数据源。
 - `max_rows` 限制行数或集合元素数，不限制字节数。`max_value_bytes` 限制每个返回值的预览，`max_result_bytes` 尽力限制返回的 MCP payload。带 `truncated` 的响应是预览，不是完整数据。
+- 整数值（如 `BIGINT`、Redis 计数器）以 JSON 字符串而非 JSON number 返回。很多 MCP 客户端会把 JSON number 按 IEEE-754 double 解析，超过 ±2^53-1 的整数（BIGINT 主键、雪花 ID 等）在传输中会丢精度。浮点数与 `DECIMAL` 保持原有表示。
 - `mode = "inspect"` 会把 `execute_sql` 和 `redis_command` 限制为有边界读取。`mode = "operate"` 保留原生命令/写操作能力。为了向后兼容，省略 `mode` 时 db-mcp 使用 `operate`。
 - 旧的 `read_only = true` 仍作为 `mode = "inspect"` 的兼容写法被接受，但不要同时配置 `mode` 和 `read_only`。
 - 配置多个数据源时，`execute_sql` 和 `redis_command` 必须显式传入 `datasource`。

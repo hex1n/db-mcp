@@ -3,6 +3,7 @@ package result
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -239,9 +240,25 @@ func NormalizeDBValue(value any, budget *Budget) any {
 		return budget.NormalizeText(v.Format("2006-01-02 15:04:05"))
 	case string:
 		return budget.NormalizeText(v)
+	case int64:
+		return normalizeInteger(strconv.FormatInt(v, 10), budget)
+	case uint64:
+		return normalizeInteger(strconv.FormatUint(v, 10), budget)
 	default:
 		return budget.AccountScalar(v)
 	}
+}
+
+// normalizeInteger renders a 64-bit integer as its exact decimal string. Many
+// MCP consumers parse JSON numbers as IEEE-754 doubles (notably JavaScript's
+// JSON.parse), so any integer beyond the safe range (±2^53-1) — a BIGINT id, a
+// snowflake key, a large counter — would silently lose precision on the wire.
+// Emitting the decimal text preserves the full int64/uint64 domain. It is
+// charged through AccountScalar (not NormalizeText) so the result-byte budget is
+// still enforced, but the digits are never truncated into a corrupt number: an
+// integer that does not fit is dropped to nil rather than mangled.
+func normalizeInteger(text string, budget *Budget) any {
+	return budget.AccountScalar(text)
 }
 
 func NormalizeRedisValue(v any, budget *Budget) any {
@@ -302,6 +319,10 @@ func NormalizeRedisValue(v any, budget *Budget) any {
 			out[budget.NormalizeText(fmt.Sprintf("%v", k))] = NormalizeRedisValue(item, budget)
 		}
 		return out
+	case int64:
+		return normalizeInteger(strconv.FormatInt(val, 10), budget)
+	case uint64:
+		return normalizeInteger(strconv.FormatUint(val, 10), budget)
 	default:
 		return budget.AccountScalar(val)
 	}

@@ -1,6 +1,7 @@
 package result
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -14,6 +15,68 @@ func TestNormalizeDBValueBudget(t *testing.T) {
 	}
 	if !budget.Truncated() || budget.Reason() != "value_bytes" {
 		t.Fatalf("expected value byte truncation, got truncated=%v reason=%q", budget.Truncated(), budget.Reason())
+	}
+}
+
+func TestNormalizeDBValueStringifiesLargeIntegers(t *testing.T) {
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"bigint max", int64(9223372036854775807), "9223372036854775807"},
+		{"bigint min", int64(-9223372036854775808), "-9223372036854775808"},
+		{"bigint unsigned max", uint64(18446744073709551615), "18446744073709551615"},
+		{"snowflake id", int64(1234567890123456789), "1234567890123456789"},
+		{"small int still string", int64(3), "3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := NewBudget(Limits{MaxRows: 10, MaxValueBytes: 64, MaxResultBytes: 1024})
+			got := NormalizeDBValue(tc.value, budget)
+			if got != tc.want {
+				t.Fatalf("NormalizeDBValue(%v) = %#v, want string %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeDBValuePreservesIntegerPrecisionEndToEnd exercises the exact path
+// that used to corrupt values: marshal a row, then re-parse it the way a float64
+// consumer (e.g. JavaScript JSON.parse) does. As strings the digits survive; as
+// JSON numbers an int64 beyond 2^53 would not.
+func TestNormalizeDBValuePreservesIntegerPrecisionEndToEnd(t *testing.T) {
+	budget := NewBudget(Limits{MaxRows: 10, MaxValueBytes: 64, MaxResultBytes: 1024})
+	const want = "1234567890123456789"
+	cell := NormalizeDBValue(int64(1234567890123456789), budget)
+
+	wire, err := json.Marshal([]any{cell})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(wire), `"`+want+`"`) {
+		t.Fatalf("wire form should quote the integer, got %s", wire)
+	}
+
+	var reparsed []any // numbers would decode to float64 here, like JS JSON.parse
+	if err := json.Unmarshal(wire, &reparsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := reparsed[0]; got != want {
+		t.Fatalf("after float64 round-trip got %#v, want %q", got, want)
+	}
+}
+
+func TestNormalizeRedisValueStringifiesLargeIntegers(t *testing.T) {
+	budget := NewBudget(Limits{MaxRows: 10, MaxValueBytes: 64, MaxResultBytes: 1024})
+	got := NormalizeRedisValue(int64(9223372036854775807), budget)
+	if got != "9223372036854775807" {
+		t.Fatalf("NormalizeRedisValue(int64 max) = %#v, want string", got)
+	}
+
+	nested := NormalizeRedisValue([]any{int64(1234567890123456789), "abc"}, budget).([]any)
+	if nested[0] != "1234567890123456789" || nested[1] != "abc" {
+		t.Fatalf("unexpected nested redis value: %#v", nested)
 	}
 }
 
